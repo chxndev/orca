@@ -1113,6 +1113,19 @@ export function createPtySubprocess(opts: PtySubprocessOptions): SubprocessHandl
         dead = true
       }
     },
+    // Why: node-pty's cols/rows are the post-clamp size the native PTY actually holds. Reporting
+    // them (instead of the daemon emulator's dims) lets the renderer's drift-check catch resizes
+    // this handle dropped (dead/invalid) or that ConPTY/WSL failed to apply.
+    getAppliedSize: () => {
+      if (dead) {
+        return null
+      }
+      try {
+        return { cols: proc.cols, rows: proc.rows }
+      } catch {
+        return null
+      }
+    },
     // Why pause/resume work on Windows too: WindowsTerminal wires _socket to the ConPTY conout pipe, so pausing backpressures the child.
     pause: () => {
       if (dead) {
@@ -1181,6 +1194,22 @@ export function createPtySubprocess(opts: PtySubprocessOptions): SubprocessHandl
     signal: (sig) => {
       // Why: same recycled-pid hazard as forceKill — once dead, dropping avoids signalling an unrelated process.
       if (dead) {
+        return
+      }
+      // Why: process.kill(pid, 'SIGWINCH') is unsupported on win32 (libuv throws), so the
+      // renderer's "force a TUI repaint at unchanged dims" requests were silently no-ops on
+      // Windows. A cols-1/cols resize pulse drives the equivalent through ConPTY, which
+      // relays a real SIGWINCH to the (possibly WSL-hosted) child.
+      if (process.platform === 'win32' && sig === 'SIGWINCH') {
+        try {
+          const { cols, rows } = proc
+          if (isValidPtySize(cols - 1, rows) && isValidPtySize(cols, rows)) {
+            proc.resize(cols - 1, rows)
+            proc.resize(cols, rows)
+          }
+        } catch {
+          // Best-effort repaint nudge — never fatal.
+        }
         return
       }
       try {

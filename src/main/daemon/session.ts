@@ -55,6 +55,10 @@ export type SubprocessHandle = {
   shellPath?: string
   write(data: string): void
   resize(cols: number, rows: number): void
+  /** Size the native PTY actually holds (node-pty's post-clamp cols/rows). Null once the child
+   *  has exited or the handle is dead. Optional: handles that cannot report it omit it and
+   *  Session.getAppliedSize falls back to the headless emulator's dims. */
+  getAppliedSize?(): { cols: number; rows: number } | null
   /** Stop reading the PTY fd (node-pty pause()) so a flooding child blocks on write. Optional:
    *  handles that cannot pause omit it and flow control degrades to a no-op. */
   pause?(): void
@@ -413,11 +417,19 @@ export class Session {
     return this.emulator.partialEscapeTailAnsi
   }
 
-  // Why: returns the size the PTY actually applied (emulator dims) so the renderer can detect a
-  // resize dropped here (exited/disposed/invalid) instead of trusting its last-requested size.
+  // Why: returns the size the PTY actually applied so the renderer can detect a resize dropped
+  // here (exited/disposed/invalid) instead of trusting its last-requested size. The native
+  // subprocess dims must win over the emulator's: resize() updates the emulator unconditionally
+  // BEFORE subprocess.resize(), and the subprocess silently drops resizes once dead/invalid —
+  // reporting emulator dims would make the renderer's drift-check an identity that can never
+  // detect a ConPTY/WSL resize that failed to apply.
   getAppliedSize(): { cols: number; rows: number } | null {
     if (this._disposed) {
       return null
+    }
+    const subprocessSize = this.subprocess.getAppliedSize?.()
+    if (subprocessSize && subprocessSize.cols > 0 && subprocessSize.rows > 0) {
+      return subprocessSize
     }
     return this.emulator.getAppliedSize()
   }

@@ -1177,6 +1177,22 @@ export class LocalPtyProvider implements IPtyProvider {
     if (!proc) {
       return
     }
+    // Why: process.kill(pid, 'SIGWINCH') is unsupported on win32 (libuv throws into the catch
+    // below), so repaint-at-unchanged-dims requests were silent no-ops on Windows. A cols-1/cols
+    // resize pulse drives the equivalent through ConPTY, which relays a real SIGWINCH to the
+    // (possibly WSL-hosted) child.
+    if (process.platform === 'win32' && signal === 'SIGWINCH') {
+      try {
+        const { cols, rows } = proc
+        if (cols > 1 && rows > 0) {
+          proc.resize(cols - 1, rows)
+          proc.resize(cols, rows)
+        }
+      } catch {
+        /* Best-effort repaint nudge — never fatal */
+      }
+      return
+    }
     try {
       process.kill(proc.pid, signal)
     } catch {

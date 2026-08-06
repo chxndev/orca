@@ -4128,10 +4128,18 @@ export function connectPanePty(
     return false
   }
 
+  // Why: resizes arriving while hidden are dropped by the authority gate, but the drop must not
+  // be silent — latch the last desired grid so visible-resume can deterministically resend it
+  // instead of depending solely on the applied-size readback (which cannot help when the read
+  // itself fails or races the resume).
+  let droppedHiddenPtyResize: { cols: number; rows: number } | null = null
+
   const forwardPtyResize = (cols: number, rows: number): void => {
     if (!isRendererPtyResizeAuthoritative()) {
+      droppedHiddenPtyResize = { cols, rows }
       return
     }
+    droppedHiddenPtyResize = null
     // Why: when a mobile-fit override is active OR mobile is currently the
     // driver of this PTY, the PTY is already at phone dims and any desktop
     // resize is wrong. Suppress resize forwarding to avoid spurious SIGWINCH
@@ -8852,6 +8860,12 @@ export function connectPanePty(
     noteVisibilityResume() {
       armVisibleRemoteViewportClaim()
       claimPendingVisibleRemoteViewport()
+      // Why: resend the last grid the hidden gate dropped before the readback-based reassertion —
+      // deterministic repair that doesn't depend on the applied-size read succeeding.
+      if (droppedHiddenPtyResize) {
+        const { cols, rows } = droppedHiddenPtyResize
+        forwardPtyResize(cols, rows)
+      }
       ptySizeReassertion.request({ fit: false })
       consumeHibernatedAgentWake()
       requestKnownWindowsShiftEnterReconfirmation()
