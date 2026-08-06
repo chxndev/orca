@@ -693,6 +693,7 @@ describe('wsl path helpers', () => {
 describe('wslUncDirectoryExists', () => {
   afterEach(() => {
     execFileSyncMock.mockReset()
+    _resetWslCachesForTests()
   })
 
   it('returns true when the distro reports the directory exists', () => {
@@ -740,5 +741,48 @@ describe('wslUncDirectoryExists', () => {
       withPlatform('linux', () => wslUncDirectoryExists('\\\\wsl.localhost\\Ubuntu\\home\\jin'))
     ).toBeNull()
     expect(execFileSyncMock).not.toHaveBeenCalled()
+  })
+
+  it('caches a positive answer and does not re-spawn wsl.exe per pane', () => {
+    execFileSyncMock.mockReturnValue('')
+    withPlatform('win32', () => {
+      expect(wslUncDirectoryExists('\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo')).toBe(true)
+      expect(wslUncDirectoryExists('\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo')).toBe(true)
+      expect(wslUncDirectoryExists('\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo')).toBe(true)
+    })
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('caches per path, not globally', () => {
+    execFileSyncMock.mockReturnValue('')
+    withPlatform('win32', () => {
+      expect(wslUncDirectoryExists('\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo-a')).toBe(true)
+      expect(wslUncDirectoryExists('\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo-b')).toBe(true)
+    })
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-probes an inconclusive answer after the short TTL lapses', () => {
+    vi.useFakeTimers()
+    try {
+      execFileSyncMock.mockImplementation(() => {
+        const error = new Error('spawn wsl.exe ENOENT') as Error & { code: string }
+        error.code = 'ENOENT'
+        throw error
+      })
+      withPlatform('win32', () => {
+        expect(wslUncDirectoryExists('\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo')).toBeNull()
+        // Within the short TTL the cached inconclusive answer is served.
+        expect(wslUncDirectoryExists('\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo')).toBeNull()
+        expect(execFileSyncMock).toHaveBeenCalledTimes(1)
+
+        vi.advanceTimersByTime(5001)
+        execFileSyncMock.mockReturnValue('')
+        expect(wslUncDirectoryExists('\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo')).toBe(true)
+        expect(execFileSyncMock).toHaveBeenCalledTimes(2)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -31,6 +31,16 @@ export function isWslPath(path: string): boolean {
   return parseWslPath(path) !== null
 }
 
+// Why: workspace switches re-validate the same UNC cwd once per restored pane, and
+// each probe is a synchronous wsl.exe spawn that blocks the main process for up to
+// 5s (worst case: panes × 5s of "Not Responding"). Cache per-path answers briefly —
+// positive answers are stable for the life of a workspace, while negative and
+// inconclusive answers expire fast so a directory created moments later (or a WSL VM
+// that just finished booting) is re-probed quickly. Neither latches forever.
+const WSL_UNC_DIR_EXISTS_POSITIVE_TTL_MS = 30_000
+const WSL_UNC_DIR_EXISTS_NON_POSITIVE_TTL_MS = 5_000
+const wslUncDirectoryExistsCache = new Map<string, { result: boolean | null; cachedAt: number }>()
+
 /**
  * Check whether a WSL UNC working directory exists by testing it inside the
  * distro itself, returning null when the answer can't be determined.
@@ -51,6 +61,22 @@ export function wslUncDirectoryExists(uncPath: string): boolean | null {
   if (!info) {
     return null
   }
+  const cached = wslUncDirectoryExistsCache.get(uncPath)
+  if (cached) {
+    const ttl =
+      cached.result === true
+        ? WSL_UNC_DIR_EXISTS_POSITIVE_TTL_MS
+        : WSL_UNC_DIR_EXISTS_NON_POSITIVE_TTL_MS
+    if (Date.now() - cached.cachedAt < ttl) {
+      return cached.result
+    }
+  }
+  const result = probeWslUncDirectoryExists(info)
+  wslUncDirectoryExistsCache.set(uncPath, { result, cachedAt: Date.now() })
+  return result
+}
+
+function probeWslUncDirectoryExists(info: WslPathInfo): boolean | null {
   try {
     execFileSync('wsl.exe', ['-d', info.distro, '--', 'test', '-d', info.linuxPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -392,6 +418,7 @@ export function getCachedWslAvailability(): boolean | null {
 
 export function _resetWslCachesForTests(): void {
   wslHomeCache.clear()
+  wslUncDirectoryExistsCache.clear()
   wslDistroCache = null
   wslDistroListRetryAfterMs = 0
   wslDistroListEmptyStreak = 0

@@ -112,16 +112,19 @@ function throwMissingWorkingDirectory(cwd: string): never {
  */
 export function validateWorkingDirectory(cwd: string): void {
   // Why: Win32 fs.statSync against the WSL 9P share (\\wsl.localhost\...) can
-  // falsely report ENOENT for directories that exist on the Linux side. Ask the
-  // distro itself; only fall back to the fs check when wsl.exe is inconclusive.
+  // falsely report ENOENT for directories that exist on the Linux side, and — worse —
+  // can block the main process indefinitely while the share is stalled (WSL VM
+  // booting/suspended), which freezes the whole window ("Not Responding"). Ask the
+  // distro itself; when wsl.exe is inconclusive, assume the directory exists rather
+  // than falling back to sync fs checks. A genuinely missing cwd then surfaces as a
+  // recoverable spawn error instead of an event-loop stall. Mirrors
+  // localStartupCwdDirectoryExists in ipc/pty.ts.
   if (isWslUncPath(cwd)) {
     const existsInDistro = wslUncDirectoryExists(cwd)
     if (existsInDistro === false) {
       throwMissingWorkingDirectory(cwd)
     }
-    if (existsInDistro === true) {
-      return
-    }
+    return
   }
 
   if (!existsSync(cwd)) {

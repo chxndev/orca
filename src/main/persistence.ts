@@ -1535,8 +1535,16 @@ function canonicalizePersistedFloatingWorkspaceDirectory(
   if (!trimmed) {
     return null
   }
+  const resolvedPath = resolveFloatingWorkspacePath(trimmed, home)
+  // Why: this runs inside Store.load(), before any window is shown. realpathSync/
+  // statSync against a \\wsl.localhost 9P share can stall the main process for the
+  // whole WSL VM boot (blank/white window at startup). Trust persisted WSL UNC
+  // entries as-is — same skip as gcStaleWorktreeMeta.
+  if (isWslUncPath(resolvedPath)) {
+    return resolve(resolvedPath)
+  }
   try {
-    const canonicalPath = resolve(realpathSync(resolveFloatingWorkspacePath(trimmed, home)))
+    const canonicalPath = resolve(realpathSync(resolvedPath))
     return statSync(canonicalPath).isDirectory() ? canonicalPath : null
   } catch {
     return null

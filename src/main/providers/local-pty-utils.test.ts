@@ -72,14 +72,17 @@ describe('validateWorkingDirectory', () => {
     expect(existsSyncMock).not.toHaveBeenCalled()
   })
 
-  it('falls back to the fs check when the distro answer is inconclusive', () => {
+  it('accepts a WSL UNC worktree without touching fs when the distro answer is inconclusive', () => {
+    // Why: falling back to existsSync/statSync against a stalled 9P share can block
+    // the main process indefinitely (white/unresponsive window). An inconclusive
+    // distro answer must be treated as "assume it exists" — the PTY spawn surfaces a
+    // recoverable error if the directory is genuinely missing.
     wslUncDirectoryExistsMock.mockReturnValue(null)
-    existsSyncMock.mockReturnValue(true)
-    statSyncMock.mockReturnValue(dirStats(true))
 
     expect(() => validateWorkingDirectory(WSL_UNC_DIR)).not.toThrow()
     expect(wslUncDirectoryExistsMock).toHaveBeenCalledWith(WSL_UNC_DIR)
-    expect(existsSyncMock).toHaveBeenCalledWith(WSL_UNC_DIR)
+    expect(existsSyncMock).not.toHaveBeenCalled()
+    expect(statSyncMock).not.toHaveBeenCalled()
   })
 
   it('validates native Windows paths via fs without consulting the distro', () => {
